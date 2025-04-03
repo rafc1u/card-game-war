@@ -840,55 +840,144 @@
       }
  }
 
-          function resolveBattle(data) {
-     // ...(rest of the function start)...
+         function resolveBattle(data) { // 'data' is the snapshot when resolution was triggered
+             // --- Pre-checks ---
+             if (!gameRef) {
+                 console.error("resolveBattle: FATAL - gameRef is null!");
+                 return;
+             }
+              // Check if already resolving (using gameState as the flag)
+             if (!data || data.gameState === 'resolving' || data.gameState === 'gameover' || data.gameState.startsWith('war')) {
+                 console.log(`resolveBattle: Skipping - Invalid state (${data?.gameState}) or already processing.`);
+                 return;
+             }
+             if (!data.players.player1?.playedCard || !data.players.player2?.playedCard) {
+                 console.log("resolveBattle: Skipping - Both cards not played yet.");
+                 return; // Not ready
+             }
 
-     // --- Normal Win --- (inside the else block after checking for WAR)
-     const winnerDeck = [...data.players[roundWinnerId].deck];
-     const cardsWon = [p1Card, p2Card]; // Only the cards played this round
-     shuffleDeck(cardsWon);
-     winnerDeck.push(...cardsWon);
+             console.log(`resolveBattle: Entered. Current state: ${data.gameState}, Triggered by previous turn: ${data.turn}`);
 
-     updates[`/players/${roundWinnerId}/deck`] = winnerDeck;
-     updates[`/players/${roundWinnerId}/cardCount`] = winnerDeck.length;
-     updates['/players/player1/playedCard'] = null;
-     updates['/players/player2/playedCard'] = null;
-     updates['/turn'] = roundWinnerId; // Winner takes next turn
+             // --- Mark as resolving immediately ---
+             // This prevents multiple triggers if handleGameLogic fires rapidly
+             const initialUpdate = { gameState: 'resolving', statusMessage: `Comparing cards...` };
+             gameRef.update(initialUpdate).then(() => {
+                 console.log("resolveBattle: Set gameState to 'resolving'. Proceeding with comparison.");
 
-     // --- *** Ensure Status Message is Correct *** ---
-     updates['/statusMessage'] = `${roundWinnerId} wins the round! ${roundWinnerId}'s turn.`;
-     updates['/gameState'] = 'playing'; // Back to playing state after delay
+                 // --- Use the latest data AFTER setting resolving state if needed ---
+                 // Re-fetch or use the passed 'data'? Passed 'data' should be okay here
+                 // as the critical state change ('resolving') is done.
+                 const p1Card = data.players.player1.playedCard;
+                 const p2Card = data.players.player2.playedCard;
+                 let roundWinnerId = null;
 
+                 // --- Compare Cards ---
+                 if (p1Card.value > p2Card.value) {
+                     roundWinnerId = 'player1';
+                 } else if (p2Card.value > p1Card.value) {
+                     roundWinnerId = 'player2';
+                 } else {
+                     // --- WAR ---
+                     console.log("resolveBattle: WAR detected!");
+                     const warUpdates = {};
+                     warUpdates['/gameState'] = 'war_p1_down'; // Start war sequence
+                     warUpdates['/statusMessage'] = "WAR! Player 1 places face-down card.";
+                     const currentWarPile = data.warPile || [];
+                     // Ensure cards have IDs before adding to pile
+                     if (!p1Card.id || !p2Card.id) console.error("Played cards missing ID!", p1Card, p2Card);
+                     warUpdates['/warPile'] = [...currentWarPile, p1Card, p2Card]; // Add tied cards
+                     warUpdates['/players/player1/playedCard'] = null; // Clear played cards
+                     warUpdates['/players/player2/playedCard'] = null;
+                     warUpdates['/turn'] = 'player1'; // P1 starts war play
 
-     // Apply updates after a delay for viewing cards
-      setTimeout(() => {
-          // Check for game over BEFORE updating deck state in Firebase
-           const p1WillHave = data.players.player1.cardCount - (roundWinnerId === 'player2' ? 1 : 0) + (roundWinnerId === 'player1' ? 2 : 0);
-           const p2WillHave = data.players.player2.cardCount - (roundWinnerId === 'player1' ? 1 : 0) + (roundWinnerId === 'player2' ? 2 : 0);
+                     gameRef.update(warUpdates).then(() => {
+                         console.log("resolveBattle: War state initiated successfully.");
+                     }).catch(error => {
+                         console.error("resolveBattle: Firebase error initiating war state:", error);
+                     });
+                     return; // Exit resolveBattle, war logic takes over
+                 }
 
-           if (p1WillHave === 0 || p2WillHave === 0) {
-               // Game Over Logic
-                let finalWinner = p1WillHave > 0 ? 'player1' : 'player2';
-               updates['/gameState'] = 'gameover';
-               updates['/winner'] = finalWinner;
-               updates['/statusMessage'] = `Game Over! ${finalWinner} wins!`;
-               updates['/turn'] = null; // No more turns
-               // Ensure final deck/count updates are included IF needed, or handled by game over state
-               updates[`/players/${finalWinner}/deck`] = winnerDeck; // Apply final deck state
-               updates[`/players/${finalWinner}/cardCount`] = winnerDeck.length;
-                // Clear opponent deck? Or just let count be 0?
-                const loserId = finalWinner === 'player1' ? 'player2' : 'player1';
-                updates[`/players/${loserId}/deck`] = [];
-                updates[`/players/${loserId}/cardCount`] = 0;
+                 // --- Normal Win ---
+                 console.log(`resolveBattle: Normal win determined for ${roundWinnerId}. Preparing final update.`);
+                 const loserId = roundWinnerId === 'player1' ? 'player2' : 'player1';
 
-               updates['/players/player1/playedCard'] = null; // Ensure cleared
-               updates['/players/player2/playedCard'] = null;
-               updates['/warPile'] = null;
+                 // Get current decks safely (handle null/undefined)
+                 const winnerDeckData = data.players[roundWinnerId]?.deck ? [...data.players[roundWinnerId].deck] : [];
+                 const loserDeckData = data.players[loserId]?.deck ? [...data.players[loserId].deck] : []; // Needed for count check
 
-           }
-          gameRef.update(updates);
-      }, BATTLE_RESOLVE_DELAY);
- }
+                 const cardsWon = [p1Card, p2Card];
+                  // Ensure cards have IDs
+                  if (!p1Card.id || !p2Card.id) console.error("Played cards missing ID before adding to winner!", p1Card, p2Card);
+
+                 shuffleDeck(cardsWon); // Shuffle winnings
+                 winnerDeckData.push(...cardsWon); // Add to bottom
+
+                 // Prepare the final updates object
+                 const finalUpdates = {};
+                 finalUpdates[`/players/${roundWinnerId}/deck`] = winnerDeckData;
+                 finalUpdates[`/players/${roundWinnerId}/cardCount`] = winnerDeckData.length;
+                 finalUpdates['/players/player1/playedCard'] = null; // **CRITICAL: Clear P1 card**
+                 finalUpdates['/players/player2/playedCard'] = null; // **CRITICAL: Clear P2 card**
+                 finalUpdates['/turn'] = roundWinnerId; // Winner takes next turn
+                 finalUpdates['/statusMessage'] = `${roundWinnerId} wins the round! ${roundWinnerId}'s turn.`;
+                 finalUpdates['/gameState'] = 'playing'; // Back to playing state
+                 finalUpdates['/warPile'] = null; // Ensure war pile is cleared
+
+                 // --- Check for Game Over ---
+                  // Calculate counts based on the state *before* awarding cards
+                  // Player 1 count check: P1 original count - 1 (if lost) + 0 (if won, cards not awarded yet for this check)
+                  // Player 2 count check: P2 original count - 1 (if lost) + 0 (if won)
+                 const p1LosesCard = roundWinnerId === 'player2';
+                 const p2LosesCard = roundWinnerId === 'player1';
+                 const p1CountAfterLoss = (data.players.player1?.cardCount ?? 0) - (p1LosesCard ? 1 : 0);
+                 const p2CountAfterLoss = (data.players.player2?.cardCount ?? 0) - (p2LosesCard ? 1 : 0);
+
+                 console.log(`resolveBattle: Counts after card loss check - P1: ${p1CountAfterLoss}, P2: ${p2CountAfterLoss}`);
+
+                 if (p1CountAfterLoss <= 0 || p2CountAfterLoss <= 0) {
+                     console.log("resolveBattle: Game Over detected!");
+                     const finalWinner = p1CountAfterLoss > 0 ? 'player1' : 'player2'; // The one who didn't run out
+
+                     // Overwrite previous updates with game over state
+                     finalUpdates['/gameState'] = 'gameover';
+                     finalUpdates['/winner'] = finalWinner;
+                     finalUpdates['/statusMessage'] = `Game Over! ${finalWinner} wins the whole game!`;
+                     finalUpdates['/turn'] = null;
+                     finalUpdates['/warPile'] = null; // Ensure cleared
+
+                      // Set final deck states for game over
+                      const finalLoserId = finalWinner === 'player1' ? 'player2' : 'player1';
+                      // Winner gets all cards (ensure winnerDeckData is correct)
+                      finalUpdates[`/players/${finalWinner}/deck`] = winnerDeckData;
+                      finalUpdates[`/players/${finalWinner}/cardCount`] = winnerDeckData.length;
+                      // Loser gets nothing
+                      finalUpdates[`/players/${finalLoserId}/deck`] = [];
+                      finalUpdates[`/players/${finalLoserId}/cardCount`] = 0;
+                       // Ensure played cards are still nulled out
+                       finalUpdates['/players/player1/playedCard'] = null;
+                       finalUpdates['/players/player2/playedCard'] = null;
+                 }
+
+                 // Apply final updates after delay
+                 console.log(`resolveBattle: Scheduling final update in ${BATTLE_RESOLVE_DELAY}ms. Updates:`, JSON.stringify(finalUpdates));
+                 setTimeout(() => {
+                     console.log("resolveBattle: setTimeout executing final update.");
+                     gameRef.update(finalUpdates).then(() => {
+                         console.log("resolveBattle: Final update successful.");
+                     }).catch(error => {
+                         console.error("resolveBattle: Firebase error executing final update:", error);
+                         // Attempt to revert state? Or just log? Logging is safer.
+                         // gameRef.child('gameState').set('error'); // Example error state
+                     });
+                 }, BATTLE_RESOLVE_DELAY);
+
+             }).catch(error => {
+                 console.error("resolveBattle: Firebase error setting 'resolving' state:", error);
+                 // If we can't even set the resolving state, something is wrong.
+                 // Maybe try to force back to 'playing'? Risky.
+             });
+         }
 
          function resolveWar(data) {
              // Similar to resolveBattle, but compares playedWarUp cards
