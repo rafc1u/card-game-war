@@ -716,197 +716,179 @@
 
         // --- Game Logic Handling ---
         function handleGameLogic(data) {
-             if (!data || !myPlayerId) return; // Not initialized yet
+    if (!data || !myPlayerId) return; // Not initialized yet
 
-             switch (data.gameState) {
-                 case 'playing':
-                     // Check if both players have played
-                     if (data.players.player1?.playedCard && data.players.player2?.playedCard) {
-                         // Trigger resolution (only one player needs to do this)
-                         if (data.turn === myPlayerId) { // Player whose turn it WAS resolves
-                             setTimeout(() => resolveBattle(data), 50); // Slight delay
-                         }
+    switch (data.gameState) {
+        case 'playing':
+            // --- *** CHANGE HERE: Check if both played, let P1 resolve *** ---
+            if (data.players.player1?.playedCard && data.players.player2?.playedCard) {
+                // Both cards are down. Let Player 1 handle the resolution logic.
+                if (myPlayerId === 'player1') {
+                     // Check if we are already resolving implicitly by gameState change
+                     // If resolveBattle sets gameState to 'resolving', this check might be redundant
+                     // But adding an explicit check might be safer if delays cause issues
+                     if(currentGameData.gameState === 'playing') { // Ensure we haven't already started resolving
+                         console.log("P1 triggering resolveBattle");
+                        setTimeout(() => resolveBattle(currentGameData), 50); // Use potentially updated data
                      }
-                     break;
-                 case 'war_p1_down':
-                 case 'war_p2_down':
-                 case 'war_p1_up':
-                 case 'war_p2_up':
-                      // War logic is handled by player clicks during specific states
-                      // Check if both players have played the required war card
-                      if(data.players.player1?.playedWarDown && data.players.player2?.playedWarDown && data.gameState === 'war_p2_down'){
-                            // Both played down, now p1 plays up. Update state if I am p1? Let p2 do it.
-                           if(myPlayerId === 'player2'){
-                               db.ref(`games/${gameId}/gameState`).set('war_p1_up');
-                                db.ref(`games/${gameId}/statusMessage`).set("War! Player 1 places face-up card.");
-                           }
-                       } else if (data.players.player1?.playedWarUp && data.players.player2?.playedWarUp && data.gameState === 'war_p2_up') {
-                           // Both played face up, resolve war
-                           if(myPlayerId === 'player2'){ // Let P2 resolve war
-                              setTimeout(() => resolveWar(data), 50);
-                           }
-                       }
-
-                      break;
-                 case 'resolving':
-                     // Waiting for resolution animations/updates
-                     break;
-                 case 'gameover':
-                     // Handled by UI update
-                     break;
-             }
-        }
-
-        function handleDeckClick() {
-            if (!currentGameData || !myPlayerId || !gameRef) return;
-
-            const currentPlayerState = currentGameData.players[myPlayerId];
-            const currentGameState = currentGameData.gameState;
-            const isMyTurn = currentGameData.turn === myPlayerId;
-
-             // Prevent action if deck empty
-             if (!currentPlayerState.deck || currentPlayerState.deck.length === 0) {
-                 console.log("No cards left!");
-                 return;
-             }
-
-             let cardToPlay = null;
-             let remainingDeck = [];
-             const updatePath = {};
-
-
-             // --- Normal Turn ---
-            if (currentGameState === 'playing' && isMyTurn && !currentPlayerState.playedCard) {
-                cardToPlay = currentPlayerState.deck[0];
-                remainingDeck = currentPlayerState.deck.slice(1);
-
-                updatePath[`/players/${myPlayerId}/playedCard`] = cardToPlay;
-                updatePath[`/players/${myPlayerId}/deck`] = remainingDeck;
-                updatePath[`/players/${myPlayerId}/cardCount`] = remainingDeck.length;
-                 // Don't change turn yet, wait for both cards
-                 updatePath['/statusMessage'] = `${myPlayerId} played. Waiting for opponent...`;
-
-                 gameRef.update(updatePath);
+                }
             }
-             // --- War Turns --- (Simplified: 1 down, 1 up)
-            else if (currentGameState === 'war_p1_down' && myPlayerId === 'player1' && !currentPlayerState.playedWarDown) {
-                 cardToPlay = currentPlayerState.deck[0];
-                 remainingDeck = currentPlayerState.deck.slice(1);
-                  updatePath[`/players/player1/playedWarDown`] = cardToPlay;
-                  updatePath[`/players/player1/deck`] = remainingDeck;
-                  updatePath[`/players/player1/cardCount`] = remainingDeck.length;
-                  updatePath['/gameState'] = 'war_p2_down'; // Next state
-                  updatePath['/statusMessage'] = "War! Player 2 places face-down card.";
-                 gameRef.update(updatePath);
-
-            } else if (currentGameState === 'war_p2_down' && myPlayerId === 'player2' && !currentPlayerState.playedWarDown) {
-                 // Similar logic for player 2 playing face down
-                 cardToPlay = currentPlayerState.deck[0];
-                 remainingDeck = currentPlayerState.deck.slice(1);
-                  updatePath[`/players/player2/playedWarDown`] = cardToPlay;
-                  updatePath[`/players/player2/deck`] = remainingDeck;
-                  updatePath[`/players/player2/cardCount`] = remainingDeck.length;
-                  // State change to war_p1_up might happen in handleGameLogic check now
-                 gameRef.update(updatePath); // Just update P2 card, listener checks will advance state
-
-             } else if (currentGameState === 'war_p1_up' && myPlayerId === 'player1' && !currentPlayerState.playedWarUp) {
-                  // P1 plays face up
-                  if (remainingDeck.length === 0) { // Ran out of cards exactly? P2 wins war automatically? Complex rule. Forfeit war for now.
-                       handleOutOfCardsWar('player1'); return;
-                   }
-                  cardToPlay = remainingDeck[0]; // Use card after the face-down one
-                  remainingDeck = remainingDeck.slice(1);
-                  updatePath[`/players/player1/playedWarUp`] = cardToPlay;
-                  updatePath[`/players/player1/deck`] = remainingDeck; // Update deck again
-                  updatePath[`/players/player1/cardCount`] = remainingDeck.length;
-                  updatePath['/gameState'] = 'war_p2_up'; // Next state
-                  updatePath['/statusMessage'] = "War! Player 2 places face-up card.";
-                 gameRef.update(updatePath);
-
-             } else if (currentGameState === 'war_p2_up' && myPlayerId === 'player2' && !currentPlayerState.playedWarUp) {
-                 // P2 plays face up
-                  if (remainingDeck.length === 0) { handleOutOfCardsWar('player2'); return; }
-                   cardToPlay = remainingDeck[0];
-                   remainingDeck = remainingDeck.slice(1);
-                  updatePath[`/players/player2/playedWarUp`] = cardToPlay;
-                  updatePath[`/players/player2/deck`] = remainingDeck;
-                  updatePath[`/players/player2/cardCount`] = remainingDeck.length;
-                  // Don't change state here, listener will trigger resolution
-                 gameRef.update(updatePath);
+            break;
+        case 'war_p1_down': // P1 needs to play down
+             break; // Action handled by click
+        case 'war_p2_down': // P2 needs to play down
+            if (data.players.player1?.playedWarDown && data.players.player2?.playedWarDown) {
+                // Both played down, advance state (let P2 do it to avoid race condition)
+                if (myPlayerId === 'player2') {
+                    // Check if state is still war_p2_down before advancing
+                    if(currentGameData.gameState === 'war_p2_down') {
+                         console.log("P2 advancing state to war_p1_up");
+                        db.ref(`games/${gameId}/gameState`).set('war_p1_up');
+                        db.ref(`games/${gameId}/statusMessage`).set("War! Player 1 places face-up card.");
+                    }
+                }
+            }
+            break;
+        case 'war_p1_up': // P1 needs to play up
+             break; // Action handled by click
+        case 'war_p2_up': // P2 needs to play up
+             if (data.players.player1?.playedWarUp && data.players.player2?.playedWarUp) {
+                 // Both played up, resolve war (let P2 do it)
+                 if (myPlayerId === 'player2') {
+                      // Check if state is still war_p2_up before resolving
+                     if(currentGameData.gameState === 'war_p2_up') {
+                          console.log("P2 triggering resolveWar");
+                         setTimeout(() => resolveWar(currentGameData), 50); // Use potentially updated data
+                     }
+                 }
              }
-        }
+            break;
+        case 'resolving':
+            // Waiting for resolution animations/updates
+            break;
+        case 'gameover':
+            // Handled by UI update
+            break;
+    }
+}
 
-         function resolveBattle(data) {
-             if (!data || data.gameState !== 'playing' || !data.players.player1?.playedCard || !data.players.player2?.playedCard) {
-                 return; // Not ready or already resolved
-             }
-             if (!gameRef) return;
+         function handleDeckClick() {
+     if (!currentGameData || !myPlayerId || !gameRef || !db) return; // Ensure db is initialized
 
-             // --- Mark as resolving to prevent double triggers ---
-             // This requires careful state management. A simple approach:
-             // Check if already resolving, if so, exit. Otherwise, set resolving state.
-             // We'll skip this explicit flag for now and rely on the logic flow.
+     const currentPlayerState = currentGameData.players[myPlayerId];
+     const currentGameState = currentGameData.gameState;
+     const isMyTurn = currentGameData.turn === myPlayerId;
 
-             const p1Card = data.players.player1.playedCard;
-             const p2Card = data.players.player2.playedCard;
-             let roundWinnerId = null;
-             const updates = { gameState: 'resolving' }; // Mark as resolving
+      if (!currentPlayerState || !currentPlayerState.deck || currentPlayerState.deck.length === 0) {
+          console.log("No cards left or player state invalid!");
+          return;
+      }
 
-              if (p1Card.value > p2Card.value) {
-                  roundWinnerId = 'player1';
-              } else if (p2Card.value > p1Card.value) {
-                  roundWinnerId = 'player2';
-              } else {
-                  // --- WAR ---
-                 updates['/gameState'] = 'war_p1_down'; // Start war sequence
-                 updates['/statusMessage'] = "WAR! Player 1 places face-down card.";
-                 const currentWarPile = data.warPile || [];
-                 updates['/warPile'] = [...currentWarPile, p1Card, p2Card]; // Add tied cards
-                 updates['/players/player1/playedCard'] = null; // Clear played cards
-                 updates['/players/player2/playedCard'] = null;
-                 // War turn logic can be complex, let P1 start war play
-                 updates['/turn'] = 'player1'; // Or keep current turn? Let's keep current turn for simplicity maybe? No, P1 start.
+      let cardToPlay = null;
+      let remainingDeck = [...currentPlayerState.deck]; // Make a copy
+      const updatePath = {};
+      const opponentPlayerId = myPlayerId === 'player1' ? 'player2' : 'player1'; // Determine opponent
 
-                 // Remove tied cards visually AFTER state update (listener will handle)
-                 // removeCardFromBattlefield(p1Card.id, 500);
-                 // removeCardFromBattlefield(p2Card.id, 500);
+     // --- Normal Turn ---
+     if (currentGameState === 'playing' && isMyTurn && !currentPlayerState.playedCard) {
+         cardToPlay = remainingDeck.shift(); // Take from copy
+         updatePath[`/players/${myPlayerId}/playedCard`] = cardToPlay;
+         updatePath[`/players/${myPlayerId}/deck`] = remainingDeck;
+         updatePath[`/players/${myPlayerId}/cardCount`] = remainingDeck.length;
 
-                 gameRef.update(updates);
-                  return; // Exit, war state will handle next steps
-              }
+         // --- *** CHANGE HERE: Switch turn and update status immediately *** ---
+         updatePath['/turn'] = opponentPlayerId; // Switch turn to opponent
+         updatePath['/statusMessage'] = `${myPlayerId} played. ${opponentPlayerId}'s turn.`; // Update status message
 
-             // --- Normal Win ---
-             const winnerDeck = [...data.players[roundWinnerId].deck];
-             const cardsWon = [p1Card, p2Card]; // Only the cards played this round
-             shuffleDeck(cardsWon);
-             winnerDeck.push(...cardsWon);
+         gameRef.update(updatePath);
+     }
+     // --- War Turns (Logic remains the same - turn managed by gameState changes) ---
+     else if (currentGameState === 'war_p1_down' && myPlayerId === 'player1' && !currentPlayerState.playedWarDown) {
+          cardToPlay = remainingDeck.shift();
+          updatePath[`/players/player1/playedWarDown`] = cardToPlay;
+          updatePath[`/players/player1/deck`] = remainingDeck;
+          updatePath[`/players/player1/cardCount`] = remainingDeck.length;
+          // State change happens in handleGameLogic check now or when P2 plays
+          updatePath['/statusMessage'] = "War! Waiting for Player 2 (down)...";
+          gameRef.update(updatePath);
 
-             updates[`/players/${roundWinnerId}/deck`] = winnerDeck;
-             updates[`/players/${roundWinnerId}/cardCount`] = winnerDeck.length;
-             updates['/players/player1/playedCard'] = null;
-             updates['/players/player2/playedCard'] = null;
-             updates['/turn'] = roundWinnerId; // Winner takes next turn
-             updates['/statusMessage'] = `${roundWinnerId} wins the round! ${roundWinnerId}'s turn.`;
-             updates['/gameState'] = 'playing'; // Back to playing state after delay
+     } else if (currentGameState === 'war_p2_down' && myPlayerId === 'player2' && !currentPlayerState.playedWarDown) {
+          cardToPlay = remainingDeck.shift();
+          updatePath[`/players/player2/playedWarDown`] = cardToPlay;
+          updatePath[`/players/player2/deck`] = remainingDeck;
+          updatePath[`/players/player2/cardCount`] = remainingDeck.length;
+          updatePath['/statusMessage'] = "War! P2 placed down. Waiting for state change...";
+          gameRef.update(updatePath); // Listener will check if both are down and advance state
+
+      } else if (currentGameState === 'war_p1_up' && myPlayerId === 'player1' && !currentPlayerState.playedWarUp) {
+            if (remainingDeck.length === 0) { handleOutOfCardsWar('player1'); return; }
+           cardToPlay = remainingDeck.shift();
+           updatePath[`/players/player1/playedWarUp`] = cardToPlay;
+           updatePath[`/players/player1/deck`] = remainingDeck;
+           updatePath[`/players/player1/cardCount`] = remainingDeck.length;
+           updatePath['/statusMessage'] = "War! Waiting for Player 2 (up)...";
+          gameRef.update(updatePath);
+
+      } else if (currentGameState === 'war_p2_up' && myPlayerId === 'player2' && !currentPlayerState.playedWarUp) {
+          if (remainingDeck.length === 0) { handleOutOfCardsWar('player2'); return; }
+          cardToPlay = remainingDeck.shift();
+          updatePath[`/players/player2/playedWarUp`] = cardToPlay;
+          updatePath[`/players/player2/deck`] = remainingDeck;
+          updatePath[`/players/player2/cardCount`] = remainingDeck.length;
+          updatePath['/statusMessage'] = "War! P2 placed up. Waiting for resolution...";
+          gameRef.update(updatePath); // Listener will check if both are up and resolve
+      }
+ }
+
+          function resolveBattle(data) {
+     // ...(rest of the function start)...
+
+     // --- Normal Win --- (inside the else block after checking for WAR)
+     const winnerDeck = [...data.players[roundWinnerId].deck];
+     const cardsWon = [p1Card, p2Card]; // Only the cards played this round
+     shuffleDeck(cardsWon);
+     winnerDeck.push(...cardsWon);
+
+     updates[`/players/${roundWinnerId}/deck`] = winnerDeck;
+     updates[`/players/${roundWinnerId}/cardCount`] = winnerDeck.length;
+     updates['/players/player1/playedCard'] = null;
+     updates['/players/player2/playedCard'] = null;
+     updates['/turn'] = roundWinnerId; // Winner takes next turn
+
+     // --- *** Ensure Status Message is Correct *** ---
+     updates['/statusMessage'] = `${roundWinnerId} wins the round! ${roundWinnerId}'s turn.`;
+     updates['/gameState'] = 'playing'; // Back to playing state after delay
 
 
-             // Apply updates after a delay for viewing cards
-              setTimeout(() => {
-                  // Check for game over BEFORE updating deck
-                  if (data.players.player1.cardCount + (roundWinnerId === 'player1' ? 2 : 0) === 0 ||
-                      data.players.player2.cardCount + (roundWinnerId === 'player2' ? 2 : 0) === 0) {
-                      updates['/gameState'] = 'gameover';
-                       updates['/winner'] = roundWinnerId;
-                      updates['/statusMessage'] = `Game Over! ${roundWinnerId} wins!`;
-                       updates['/turn'] = null; // No more turns
-                       // Clear remaining fields?
-                       updates['/players/player1/playedCard'] = null;
-                       updates['/players/player2/playedCard'] = null;
-                       updates['/warPile'] = null;
-                  }
-                 gameRef.update(updates);
-             }, BATTLE_RESOLVE_DELAY);
-         }
+     // Apply updates after a delay for viewing cards
+      setTimeout(() => {
+          // Check for game over BEFORE updating deck state in Firebase
+           const p1WillHave = data.players.player1.cardCount - (roundWinnerId === 'player2' ? 1 : 0) + (roundWinnerId === 'player1' ? 2 : 0);
+           const p2WillHave = data.players.player2.cardCount - (roundWinnerId === 'player1' ? 1 : 0) + (roundWinnerId === 'player2' ? 2 : 0);
+
+           if (p1WillHave === 0 || p2WillHave === 0) {
+               // Game Over Logic
+                let finalWinner = p1WillHave > 0 ? 'player1' : 'player2';
+               updates['/gameState'] = 'gameover';
+               updates['/winner'] = finalWinner;
+               updates['/statusMessage'] = `Game Over! ${finalWinner} wins!`;
+               updates['/turn'] = null; // No more turns
+               // Ensure final deck/count updates are included IF needed, or handled by game over state
+               updates[`/players/${finalWinner}/deck`] = winnerDeck; // Apply final deck state
+               updates[`/players/${finalWinner}/cardCount`] = winnerDeck.length;
+                // Clear opponent deck? Or just let count be 0?
+                const loserId = finalWinner === 'player1' ? 'player2' : 'player1';
+                updates[`/players/${loserId}/deck`] = [];
+                updates[`/players/${loserId}/cardCount`] = 0;
+
+               updates['/players/player1/playedCard'] = null; // Ensure cleared
+               updates['/players/player2/playedCard'] = null;
+               updates['/warPile'] = null;
+
+           }
+          gameRef.update(updates);
+      }, BATTLE_RESOLVE_DELAY);
+ }
 
          function resolveWar(data) {
              // Similar to resolveBattle, but compares playedWarUp cards
