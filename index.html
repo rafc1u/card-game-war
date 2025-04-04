@@ -277,17 +277,9 @@
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-database-compat.js"></script>
-
-    <script>
+   <script src="https://www.gstatic.com/firebasejs/9.15.0/firebase-app-check-compat.js"></script>
 	
-		const urlParams = new URLSearchParams(window.location.search);
-        const apiKeyFromUrl = urlParams.get('key');
-
-             if (!apiKeyFromUrl) {
-                 statusDiv.textContent = "Error: API Key missing. Add '?key=YOUR_API_KEY' to the URL.";
-                 console.error("API Key missing from URL parameter 'key'");
-                 disableGameInteractions(); // Optional helper
-             }
+    <script>
 	
         // --- Constants ---
         const suits = ["♥", "♦", "♣", "♠"];
@@ -301,7 +293,7 @@
         // --- Firebase Setup ---
         // PASTE YOUR FIREBASE CONFIGURATION OBJECT HERE:
         const firebaseConfig = {
-			apiKey: apiKeyFromUrl,
+			apiKey: "AIzaSyBLCRLrfzhCx1UAqeS5zFme6nKR1QqliPo",
 			authDomain: "war-card-game-ee38b.firebaseapp.com",
 			databaseURL: "https://war-card-game-ee38b-default-rtdb.europe-west1.firebasedatabase.app",
 			projectId: "war-card-game-ee38b",
@@ -471,6 +463,20 @@
         function initializeFirebase() {
             try {
                 firebase.initializeApp(firebaseConfig);
+
+		    // --- Initialize App Check ---
+		try {
+		    const appCheck = firebase.appCheck();
+		    appCheck.activate(
+		        'YOUR_RECAPTCHA_V3_SITE_KEY', // Paste your reCAPTCHA v3 Site Key here
+		        true // isTokenAutoRefreshEnabled
+		    );
+		    console.log("Firebase App Check activated.");
+		} catch (error) {
+		    console.error("Firebase App Check initialization failed:", error);
+		    // Handle error appropriately - maybe disable game?
+		}
+		    
                 db = firebase.database();
                 statusDiv.textContent = "Firebase initialized. Checking for game...";
                 initGame();
